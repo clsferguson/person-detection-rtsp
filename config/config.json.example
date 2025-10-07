@@ -1,0 +1,6 @@
+{
+    "rtsp_url": "rtsp://example.com/stream",
+    "polygon": [[0, 0], [100, 0], [100, 100], [0, 100]],
+    "point": [50, 50],
+    "max_dist": 100
+}

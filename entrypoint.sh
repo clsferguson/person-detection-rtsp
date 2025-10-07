@@ -11,6 +11,12 @@ apt-get update && apt-get install -y \
     libxrender-dev \
     libgomp1
 
+# Create config.json from example if it doesn't exist
+if [ ! -f /app/config/config.json ]; then
+    echo "Creating config.json from example..."
+    cp /app/config/config.json.example /app/config/config.json
+fi
+
 echo "Downloading YOLO model..."
 python3 -c "from ultralytics import YOLO; YOLO('yolo11n.pt')"
 

@@ -7,6 +7,5 @@ env/
 venv/
 .venv/
 .env
-config.json
 models/
 config/config.json
