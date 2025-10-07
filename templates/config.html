@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Config</title>
+</head>
+<body>
+    <h1>Configuration</h1>
+    <form method="post">
+        RTSP URL: <input type="text" name="rtsp" value="{{ config.rtsp_url }}"><br>
+        Polygon (e.g., (0,0) (100,0) (100,100) (0,100)): <input type="text" name="polygon" value="{{ ' '.join('(' + str(x) + ',' + str(y) + ')' for x,y in config.polygon) }}"><br>
+        Target Point (x,y): <input type="text" name="point" value="({{ config.point[0] }},{{ config.point[1] }})"><br>
+        Max Distance: <input type="number" name="max_dist" value="{{ config.max_dist }}"><br>
+        <input type="submit" value="Save">
+    </form>
+    <a href="{{ url_for('index') }}">Back to Stream</a>
+</body>
+</html>
