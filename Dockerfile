@@ -7,6 +7,8 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 
+WORKDIR /app
+
 
 COPY . .
 COPY entrypoint.sh /entrypoint.sh
