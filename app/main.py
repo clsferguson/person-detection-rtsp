@@ -63,13 +63,13 @@ def config_page():
         config['polygon'] = [tuple(map(int, p.strip('()').split(','))) for p in request.form['polygon'].split()]
         config['point'] = tuple(map(int, request.form['point'].strip('()').split(',')))
         config['max_dist'] = int(request.form['max_dist'])
-        with open('config.json', 'w') as f:
+        with open('config/config.json', 'w') as f:
             json.dump(config, f)
     return render_template('config.html', config=config)
 
 if __name__ == '__main__':
-    if os.path.exists('config.json'):
-        with open('config.json') as f:
+    if os.path.exists('config/config.json'):
+        with open('config/config.json') as f:
             config.update(json.load(f))
     http_server = WSGIServer(('0.0.0.0', 5000), app)
     http_server.serve_forever()

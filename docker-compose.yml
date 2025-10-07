@@ -6,4 +6,7 @@ services:
       - "5000:5000"
     runtime: nvidia
     volumes:
-      - ./config.json:/app/config.json
+      - person_detection_rtsp_config:/app/config
+
+volumes:
+  person_detection_rtsp_config:
