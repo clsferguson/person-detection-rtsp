@@ -1,11 +1,180 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Person Detection</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Person Detection - Live Stream</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            background: white;
+            padding: 20px 30px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .header h1 {
+            color: #333;
+            font-size: 28px;
+            margin-bottom: 5px;
+        }
+        .header p {
+            color: #666;
+            font-size: 14px;
+        }
+        .video-container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .video-wrapper {
+            position: relative;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            max-width: 100%;
+        }
+        .video-wrapper img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        .info-panel {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        .info-item {
+            background: #f7fafc;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+        .info-item h3 {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+        .info-item p {
+            font-size: 18px;
+            color: #333;
+            font-weight: 600;
+        }
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .btn {
+            display: inline-block;
+            padding: 12px 24px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 500;
+            transition: background 0.3s;
+        }
+        .btn:hover {
+            background: #5568d3;
+        }
+        .btn-secondary {
+            background: #48bb78;
+        }
+        .btn-secondary:hover {
+            background: #38a169;
+        }
+        .status-indicator {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #48bb78;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .footer {
+            text-align: center;
+            color: white;
+            margin-top: 20px;
+            opacity: 0.8;
+        }
+    </style>
 </head>
 <body>
-    <h1>Real-Time Person Detection</h1>
-    <img src="{{ url_for('video_feed') }}" width="640" height="480">
-    <a href="{{ url_for('config_page') }}">Configure Settings</a>
+    <div class="container">
+        <div class="header">
+            <h1>🎥 Real-Time Person Detection</h1>
+            <p><span class="status-indicator"></span>Live RTSP Stream with YOLO11</p>
+        </div>
+
+        <div class="video-container">
+            <h2 style="margin-bottom: 15px; color: #333;">📹 Live Feed</h2>
+            <div class="video-wrapper">
+                <img src="{{ url_for('video_feed') }}" alt="Live Video Feed">
+            </div>
+        </div>
+
+        <div class="info-panel">
+            <h2 style="margin-bottom: 10px; color: #333;">📊 Current Configuration</h2>
+            <div class="info-grid">
+                <div class="info-item">
+                    <h3>RTSP URL</h3>
+                    <p style="font-size: 14px; word-break: break-all;">
+                        {{ config.rtsp_url if config.rtsp_url else 'Not configured' }}
+                    </p>
+                </div>
+                <div class="info-item">
+                    <h3>Detection Zone</h3>
+                    <p>{{ config.polygon|length }} points</p>
+                </div>
+                <div class="info-item">
+                    <h3>Target Point</h3>
+                    <p>({{ config.point[0] }}, {{ config.point[1] }})</p>
+                </div>
+                <div class="info-item">
+                    <h3>Max Distance</h3>
+                    <p>{{ config.max_dist }} px</p>
+                </div>
+            </div>
+            <div class="button-group" style="margin-top: 20px;">
+                <a href="{{ url_for('config_page') }}" class="btn">⚙️ Configure Settings</a>
+                <a href="/health" class="btn btn-secondary">❤️ Health Check</a>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>Person Detection System | Powered by YOLOv11 & Flask</p>
+        </div>
+    </div>
 </body>
 </html>
