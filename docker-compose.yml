@@ -1,11 +1,9 @@
 services:
   app:
-    build: .
+    image: ghcr.io/clsferguson/person-detection-rtsp:latest
     gpus: all
     ports:
       - "5000:5000"
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
     runtime: nvidia
     volumes:
       - ./config.json:/app/config.json
