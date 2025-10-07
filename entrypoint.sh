@@ -1,5 +1,11 @@
 #!/bin/bash
 
-# Model downloaded at build time
+set -e
 
-exec "$@" 
+echo "Downloading YOLO model..."
+
+python3 -c "from ultralytics import YOLO; YOLO('yolo11n.pt')"
+
+echo "Model downloaded."
+
+exec "$@"
