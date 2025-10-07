@@ -27,3 +27,14 @@ References:
 ## Testing
 
 Run tests: `pytest`
+
+## Running from Docker Image
+
+To run the pre-built image from GitHub Container Registry:
+
+```bash
+docker pull ghcr.io/clsferguson/person-detection-rtsp:latest
+docker run -p 5000:5000 ghcr.io/clsferguson/person-detection-rtsp:latest
+```
+
+Access the web UI at http://localhost:5000
