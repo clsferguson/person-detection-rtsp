@@ -7,10 +7,11 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 
-# Pre-download YOLO11 model
-RUN python3 -c "from ultralytics import YOLO; YOLO('yolo11n.pt')"
 
 COPY . .
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
 
 EXPOSE 5000
 
