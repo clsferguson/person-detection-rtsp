@@ -1,5 +1,5 @@
 #!/bin/bash
 
-python3 -c "from ultralytics import YOLO; YOLO('yolo11n.pt')"
+# Model downloaded at build time
 
-exec python3 app.py
+exec "$@" 
