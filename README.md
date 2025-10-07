@@ -19,6 +19,7 @@ Real-time multi-person detection on RTSP streams using YOLO11, with proximity va
 Pinned versions in requirements.txt. Update via pip-tools if needed.
 
 References:
+- numpy: https://pypi.org/project/numpy/ (accessed Oct 2024)
 - ultralytics: https://pypi.org/project/ultralytics/ (accessed Oct 2024)
 - opencv-python: https://pypi.org/project/opencv-python/ (accessed Oct 2024)
 - flask: https://pypi.org/project/Flask/ (accessed Oct 2024)
