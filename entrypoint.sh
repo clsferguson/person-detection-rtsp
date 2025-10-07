@@ -3,13 +3,12 @@ set -e
 
 echo "Installing OpenCV dependencies..."
 apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
-    libglx-mesa0 \
-    libglib2.0-0 \
+    libgl1 \
+    libglib2.0-0t64 \
+    libgomp1 \
     libsm6 \
     libxext6 \
-    libxrender-dev \
-    libgomp1
+    libxrender1
 
 # Create config.json from example if it doesn't exist
 if [ ! -f /app/config/config.json ]; then
