@@ -80,6 +80,11 @@
         #video-stream {
             width: 100%;
             display: block;
+            user-select: none;
+            -webkit-user-drag: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
         }
 
         #overlay-canvas {
@@ -502,10 +507,18 @@
                 }
                 const aspectRatio = (state.frame.width || 640) / (state.frame.height || 480);
                 const calculatedHeight = rect.width / aspectRatio;
-                canvas.width = state.frame.width || 640;
-                canvas.height = state.frame.height || 480;
+                const logicalWidth = state.frame.width || 640;
+                const logicalHeight = state.frame.height || 480;
+                canvas.width = logicalWidth;
+                canvas.height = logicalHeight;
                 canvas.style.width = `${rect.width}px`;
                 canvas.style.height = `${calculatedHeight}px`;
+
+                const wrapper = document.getElementById('video-wrapper');
+                if (wrapper) {
+                    wrapper.style.width = `${rect.width}px`;
+                    wrapper.style.height = `${calculatedHeight}px`;
+                }
             }
 
     
