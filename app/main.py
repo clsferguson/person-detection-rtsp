@@ -9,7 +9,7 @@ import socket
 import sys
 import time
 from datetime import datetime
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Tuple, Union
 from urllib.parse import urlparse
 
 import cv2
@@ -33,25 +33,49 @@ config: Dict[str, object] = {
     'polygon': [(0, 0), (640, 0), (640, 480), (0, 480)],
     'point': (320, 240),
     'max_dist': 200,
+    'frame_width': 640,
+    'frame_height': 480,
 }
 
 
-def normalize_polygon(points: Iterable[Iterable[int]]) -> List[Tuple[int, int]]:
+def normalize_polygon(points: Iterable[Iterable[Union[int, float]]]) -> List[Tuple[int, int]]:
     """Ensure polygon points are stored as a list of integer tuples."""
     normalized: List[Tuple[int, int]] = []
     for pair in points:
-        if isinstance(pair, (tuple, list)) and len(pair) == 2:
-            normalized.append((int(pair[0]), int(pair[1])))
+        if isinstance(pair, (tuple, list)) and len(pair) >= 2:
+            normalized.append((int(float(pair[0])), int(float(pair[1]))))
+        elif isinstance(pair, dict) and {'x', 'y'} <= pair.keys():
+            normalized.append((int(float(pair['x'])), int(float(pair['y']))))
         else:  # pragma: no cover - defensive guard
             raise ValueError(f"Invalid polygon point: {pair}")
+
+    if len(normalized) < 3:
+        raise ValueError('Polygon must contain at least three points')
+
     return normalized
 
 
-def normalize_point(point: Iterable[int]) -> Tuple[int, int]:
+def normalize_point(point: Union[Iterable[Union[int, float]], Dict[str, Union[int, float]]]) -> Tuple[int, int]:
     """Ensure the reference point is stored as an integer tuple."""
-    if isinstance(point, (tuple, list)) and len(point) == 2:
-        return int(point[0]), int(point[1])
+    if isinstance(point, dict) and {'x', 'y'} <= point.keys():
+        return int(float(point['x'])), int(float(point['y']))
+    if isinstance(point, (tuple, list)) and len(point) >= 2:
+        return int(float(point[0])), int(float(point[1]))
     raise ValueError(f"Invalid point value: {point}")  # pragma: no cover - defensive guard
+
+
+def serialize_config() -> Dict[str, object]:
+    """Return the current configuration in a JSON-safe structure."""
+    return {
+        'rtsp_url': config.get('rtsp_url', ''),
+        'polygon': [list(pt) for pt in config.get('polygon', [])],
+        'point': list(config.get('point', (0, 0))),
+        'max_dist': config.get('max_dist', 200),
+        'frame': {
+            'width': config.get('frame_width', 640),
+            'height': config.get('frame_height', 480),
+        },
+    }
 
 
 def update_config(new_config: Dict[str, object]) -> None:
@@ -62,6 +86,8 @@ def update_config(new_config: Dict[str, object]) -> None:
         config['polygon'] = normalize_polygon(config['polygon'])  # type: ignore[arg-type]
     if 'point' in config:
         config['point'] = normalize_point(config['point'])  # type: ignore[arg-type]
+    if 'max_dist' in config:
+        config['max_dist'] = max(int(config['max_dist']), 1)
 
 
 def save_config(config_path: str = 'config/config.json') -> None:
@@ -177,7 +203,7 @@ def gen_frames():
                 build_message_frame(
                     [
                         'No RTSP stream configured',
-                        'Visit the configuration page to add a stream.',
+                        'Enable edit mode to set a stream URL.',
                     ],
                     background_color=(20, 20, 20),
                 )
@@ -232,6 +258,9 @@ def gen_frames():
                     break
 
                 frame_count += 1
+
+                config['frame_width'] = int(frame.shape[1])
+                config['frame_height'] = int(frame.shape[0])
 
                 polygon_points: List[Tuple[int, int]] = config['polygon']  # type: ignore[assignment]
                 target_point: Tuple[int, int] = config['point']  # type: ignore[assignment]
@@ -302,10 +331,10 @@ def gen_frames():
         time.sleep(0.5)
 
 
-@app.route('/')
+@app.route('/', methods=['GET'])
 def index():
-    """Main page with video stream."""
-    return render_template('index.html', config=config)
+    """Main page with video stream and inline configuration."""
+    return render_template('index.html', config=config, config_json=json.dumps(serialize_config()))
 
 
 @app.route('/video_feed')
@@ -316,67 +345,50 @@ def video_feed():
 
 @app.route('/config', methods=['GET', 'POST'])
 def config_page():
-    """Configuration page for RTSP and detection settings."""
-    global config
-    message = None
+    """JSON configuration endpoint for the UI."""
+    if request.method == 'GET':
+        return jsonify({'status': 'ok', 'config': serialize_config()})
 
-    if request.method == 'POST':
+    try:
+        payload = request.get_json(force=True)
+    except Exception:
+        return jsonify({'status': 'error', 'message': 'Invalid JSON payload'}), 400
+
+    if not isinstance(payload, dict):
+        return jsonify({'status': 'error', 'message': 'Configuration payload must be an object'}), 400
+
+    updates: Dict[str, object] = {}
+
+    if 'rtsp_url' in payload:
+        updates['rtsp_url'] = str(payload.get('rtsp_url', '')).strip()
+
+    if 'max_dist' in payload:
         try:
-            rtsp_url = request.form.get('rtsp', '').strip()
+            updates['max_dist'] = max(int(payload['max_dist']), 1)
+        except (TypeError, ValueError):
+            return jsonify({'status': 'error', 'message': 'max_dist must be an integer'}), 400
 
-            polygon_input = request.form.get('polygon', '').strip()
-            polygon_pairs: List[Tuple[int, int]] = []
-            if polygon_input:
-                for token in polygon_input.split():
-                    cleaned = token.strip().strip('()')
-                    if not cleaned:
-                        continue
-                    parts = [part.strip() for part in cleaned.split(',')]
-                    if len(parts) != 2:
-                        raise ValueError(f"Invalid polygon point: {token}")
-                    polygon_pairs.append((int(parts[0]), int(parts[1])))
+    if 'polygon' in payload:
+        try:
+            updates['polygon'] = normalize_polygon(payload['polygon'])  # type: ignore[arg-type]
+        except ValueError as exc:
+            return jsonify({'status': 'error', 'message': str(exc)}), 400
 
-            point_input = request.form.get('point', '').strip()
-            point_tuple = None
-            if point_input:
-                cleaned_point = point_input.strip('()')
-                parts = [part.strip() for part in cleaned_point.split(',') if part.strip()]
-                if len(parts) == 2:
-                    point_tuple = (int(parts[0]), int(parts[1]))
-                else:
-                    raise ValueError(f"Invalid point value: {point_input}")
+    if 'point' in payload:
+        try:
+            updates['point'] = normalize_point(payload['point'])  # type: ignore[arg-type]
+        except ValueError as exc:
+            return jsonify({'status': 'error', 'message': str(exc)}), 400
 
-            max_dist = int(request.form.get('max_dist', config['max_dist']))
+    try:
+        update_config(updates)
+        save_config()
+        logger.info("Configuration updated via API")
+    except Exception as exc:  # pragma: no cover - logging path
+        logger.error(f"Failed to save config: {exc}")
+        return jsonify({'status': 'error', 'message': f'Failed to save configuration: {exc}'}), 500
 
-            updates: Dict[str, object] = {
-                'rtsp_url': rtsp_url,
-                'max_dist': max_dist,
-            }
-            if polygon_pairs:
-                updates['polygon'] = polygon_pairs
-            if point_tuple is not None:
-                updates['point'] = point_tuple
-
-            update_config(updates)
-            save_config()
-
-            message = "✓ Configuration saved successfully!"
-            logger.info("Configuration updated and saved")
-
-        except Exception as exc:
-            message = f"✗ Error saving configuration: {exc}"
-            logger.error(f"Failed to save config: {exc}")
-
-    polygon_display = ' '.join(f'({x},{y})' for x, y in config['polygon'])
-    point_display = f"({config['point'][0]},{config['point'][1]})"
-
-    return render_template(
-        'config.html',
-        config=config,
-        message=message,
-        polygon_display=polygon_display,
-        point_display=point_display,
-    )
+    return jsonify({'status': 'ok', 'config': serialize_config()})
 
 
 @app.route('/health')
@@ -397,37 +409,23 @@ def status():
     """Status information endpoint."""
     return jsonify(
         {
-            'config': config,
-            'model': 'yolo11n.pt',
+            'config': serialize_config(),
             'model_loaded': model is not None,
         }
     )
 
 
-if __name__ == '__main__':
-    logger.info("=" * 60)
-    logger.info("🚀 Person Detection RTSP Application Starting")
-    logger.info("=" * 60)
-
-    if not load_model():
-        logger.error("Failed to initialize. Exiting.")
-        sys.exit(1)
-
+if __name__ == '__main__':  # pragma: no cover - application entry point
     load_config()
-
-    host = '0.0.0.0'
-    port = 5000
-    logger.info(f"🌐 Starting web server on http://{host}:{port}")
-    logger.info(f"📺 Access the stream at: http://{host}:{port}/")
-    logger.info(f"⚙️  Configuration page: http://{host}:{port}/config")
-    logger.info(f"❤️  Health check: http://{host}:{port}/health")
-    logger.info("=" * 60)
-
-    try:
-        http_server = WSGIServer((host, port), app, log=logger)
-        http_server.serve_forever()
-    except KeyboardInterrupt:
-        logger.info("Shutting down...")
-    except Exception as exc:
-        logger.error(f"Server error: {exc}")
-        sys.exit(1)
+    load_model()
+    port = int(os.environ.get('PORT', 5000))
+    server = WSGIServer(('0.0.0.0', port), app)
+    logger.info("============================================================")
+    logger.info("🚀 Person Detection RTSP Application Starting")
+    logger.info("============================================================")
+    logger.info("🌐 Starting web server on http://0.0.0.0:%s", port)
+    logger.info("📺 Access the stream at: http://0.0.0.0:%s/", port)
+    logger.info("⚙️  Configuration page: inline on main view")
+    logger.info("❤️  Health check: http://0.0.0.0:%s/health", port)
+    logger.info("============================================================")
+    server.serve_forever()

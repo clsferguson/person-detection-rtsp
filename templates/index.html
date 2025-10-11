@@ -5,175 +5,687 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Person Detection - Live Stream</title>
     <style>
+        :root {
+            --primary: #667eea;
+            --primary-dark: #5568d3;
+            --accent: #48bb78;
+            --danger: #e53e3e;
+            --bg-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            --panel-bg: rgba(255, 255, 255, 0.95);
+            --panel-shadow: 0 12px 25px rgba(31, 38, 135, 0.15);
+            --border-radius: 16px;
+            --transition: all 0.25s ease;
+        }
+
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
             min-height: 100vh;
-            padding: 20px;
+            background: var(--bg-gradient);
+            padding: 30px;
+            color: #1a202c;
         }
+
         .container {
             max-width: 1200px;
             margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
         }
-        .header {
-            background: white;
-            padding: 20px 30px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            margin-bottom: 20px;
+
+        header {
+            background: var(--panel-bg);
+            border-radius: var(--border-radius);
+            padding: 24px 32px;
+            box-shadow: var(--panel-shadow);
         }
-        .header h1 {
-            color: #333;
-            font-size: 28px;
-            margin-bottom: 5px;
+
+        header h1 {
+            font-size: 2.2rem;
+            margin-bottom: 8px;
+            color: #2d3748;
         }
-        .header p {
-            color: #666;
-            font-size: 14px;
+
+        header p {
+            color: #4a5568;
+            font-size: 0.95rem;
         }
-        .video-container {
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            margin-bottom: 20px;
+
+        .content-grid {
+            display: grid;
+            grid-template-columns: 3fr 2fr;
+            gap: 24px;
         }
+
+        .panel {
+            background: var(--panel-bg);
+            border-radius: var(--border-radius);
+            box-shadow: var(--panel-shadow);
+            padding: 20px 24px;
+        }
+
         .video-wrapper {
             position: relative;
-            background: #000;
-            border-radius: 8px;
+            border-radius: 12px;
             overflow: hidden;
-            max-width: 100%;
+            background: #111827;
         }
-        .video-wrapper img {
+
+        #video-stream {
             width: 100%;
-            height: auto;
             display: block;
         }
-        .info-panel {
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            margin-bottom: 20px;
+
+        #overlay-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s ease;
         }
-        .info-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin-top: 15px;
+
+        #overlay-canvas.editable {
+            pointer-events: auto;
+            opacity: 1;
+            cursor: crosshair;
         }
-        .info-item {
-            background: #f7fafc;
-            padding: 15px;
-            border-radius: 8px;
-            border-left: 4px solid #667eea;
-        }
-        .info-item h3 {
-            font-size: 12px;
-            color: #666;
-            text-transform: uppercase;
-            margin-bottom: 5px;
-        }
-        .info-item p {
-            font-size: 18px;
-            color: #333;
+
+        .edit-banner {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            padding: 8px 12px;
+            border-radius: 999px;
+            background: rgba(72, 187, 120, 0.9);
+            color: white;
             font-weight: 600;
+            letter-spacing: 0.5px;
+            display: none;
         }
-        .button-group {
+
+        .edit-banner.active {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .controls {
             display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 16px;
         }
-        .btn {
-            display: inline-block;
-            padding: 12px 24px;
-            background: #667eea;
+
+        .controls button {
+            border: none;
+            padding: 12px 18px;
+            border-radius: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: var(--transition);
+        }
+
+        .btn-primary {
+            background: var(--primary);
             color: white;
-            text-decoration: none;
-            border-radius: 6px;
-            font-weight: 500;
-            transition: background 0.3s;
         }
-        .btn:hover {
-            background: #5568d3;
+
+        .btn-primary:hover {
+            background: var(--primary-dark);
         }
-        .btn-secondary {
-            background: #48bb78;
+
+        .btn-ghost {
+            background: rgba(102, 126, 234, 0.12);
+            color: var(--primary);
         }
-        .btn-secondary:hover {
-            background: #38a169;
+
+        .btn-ghost:hover {
+            background: rgba(102, 126, 234, 0.2);
         }
-        .status-indicator {
-            display: inline-block;
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            background: #48bb78;
-            margin-right: 8px;
-            animation: pulse 2s infinite;
+
+        form {
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
         }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
+
+        label {
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: #2d3748;
+            letter-spacing: 0.35px;
+            text-transform: uppercase;
         }
-        .footer {
-            text-align: center;
-            color: white;
-            margin-top: 20px;
-            opacity: 0.8;
+
+        input[type="text"],
+        input[type="number"],
+        textarea {
+            width: 100%;
+            padding: 12px 14px;
+            border-radius: 10px;
+            border: 1px solid rgba(113, 128, 150, 0.35);
+            background: rgba(247, 250, 252, 0.9);
+            font-size: 0.95rem;
+            transition: var(--transition);
+        }
+
+        input[type="text"]:focus,
+        input[type="number"]:focus,
+        textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.2);
+        }
+
+        textarea {
+            min-height: 80px;
+            resize: vertical;
+        }
+
+        .hint {
+            font-size: 0.8rem;
+            color: #718096;
+            line-height: 1.4;
+        }
+
+        .status-message {
+            border-radius: 10px;
+            padding: 12px 16px;
+            font-weight: 600;
+            display: none;
+        }
+
+        .status-success {
+            display: block;
+            background: rgba(72, 187, 120, 0.12);
+            color: #276749;
+        }
+
+        .status-error {
+            display: block;
+            background: rgba(229, 62, 62, 0.12);
+            color: #9b2c2c;
+        }
+
+        .legend {
+            display: flex;
+            gap: 14px;
+            align-items: center;
+            margin-top: 10px;
+            font-size: 0.85rem;
+            color: #4a5568;
+        }
+
+        .legend span {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .legend .swatch {
+            width: 12px;
+            height: 12px;
+            border-radius: 999px;
+        }
+
+        .info-footer {
+            margin-top: 18px;
+            padding: 14px 16px;
+            border-radius: 12px;
+            background: rgba(102, 126, 234, 0.08);
+            color: #2d3748;
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+
+        @media (max-width: 980px) {
+            .content-grid {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="header">
+        <header>
             <h1>🎥 Real-Time Person Detection</h1>
-            <p><span class="status-indicator"></span>Live RTSP Stream with YOLO11</p>
+            <p>
+                Multi-person tracking on RTSP streams with polygon target zones.
+                Assign proximity scores (0 at the polygon edge, 1000 at the target point) to the closest detected person.
+            </p>
+        </header>
+
+        <div class="content-grid">
+            <section class="panel">
+                <h2 style="margin-bottom: 16px; color: #2d3748;">Live Feed</h2>
+                <div class="video-wrapper" id="video-wrapper">
+                    <img id="video-stream" src="{{ url_for('video_feed') }}" alt="Live Video Feed">
+                    <canvas id="overlay-canvas"></canvas>
+                    <div class="edit-banner" id="edit-banner">✏️ Edit Mode</div>
+                </div>
+
+                <div class="controls">
+                    <div class="legend">
+                        <span><span class="swatch" style="background:#f56565;"></span> Polygon vertex</span>
+                        <span><span class="swatch" style="background:#38a169;"></span> Target point</span>
+                        <span><span class="swatch" style="background:#ed8936;"></span> Add vertex (right-click)</span>
+                    </div>
+                    <div style="display:flex; gap:10px;">
+                        <button id="toggle-edit" type="button" class="btn-ghost">Enable Edit Mode</button>
+                        <button id="reset-geometry" type="button" class="btn-ghost">Reset Geometry</button>
+                    </div>
+                </div>
+
+                <div class="info-footer">
+                    Drag polygon vertices to reshape your detection zone, right-click a polygon edge to insert additional
+                    points, and drag the target point marker to reposition your priority spot. Save changes on the right
+                    when you are done.
+                </div>
+            </section>
+
+            <aside class="panel">
+                <h2 style="margin-bottom: 16px; color: #2d3748;">Configuration</h2>
+                <div id="status-message" class="status-message"></div>
+                <form id="config-form">
+                    <div>
+                        <label for="rtsp-url">RTSP Stream URL</label>
+                        <input type="text" id="rtsp-url" name="rtsp_url" placeholder="rtsp://user:pass@host:port/stream" autocomplete="off">
+                        <p class="hint">The application checks connectivity before attempting to stream. Provide a reachable RTSP endpoint for live detections.</p>
+                    </div>
+
+                    <div>
+                        <label for="max-dist">Maximum Distance (pixels)</label>
+                        <input type="number" id="max-dist" name="max_dist" min="1" step="1">
+                        <p class="hint">Distances are scaled so the polygon boundary reports ~0 and the target point reports ~1000.</p>
+                    </div>
+
+                    <div>
+                        <label for="polygon-coords">Polygon Vertices</label>
+                        <textarea id="polygon-coords" readonly></textarea>
+                        <p class="hint">Vertices update automatically when you drag points in edit mode.</p>
+                    </div>
+
+                    <div>
+                        <label for="target-point">Target Point</label>
+                        <input type="text" id="target-point" readonly>
+                    </div>
+
+                    <div style="display:flex; gap:10px; justify-content:flex-end;">
+                        <button type="submit" class="btn-primary">Save Configuration</button>
+                    </div>
+                </form>
+            </aside>
         </div>
 
-        <div class="video-container">
-            <h2 style="margin-bottom: 15px; color: #333;">📹 Live Feed</h2>
-            <div class="video-wrapper">
-                <img src="{{ url_for('video_feed') }}" alt="Live Video Feed">
-            </div>
-        </div>
-
-        <div class="info-panel">
-            <h2 style="margin-bottom: 10px; color: #333;">📊 Current Configuration</h2>
-            <div class="info-grid">
-                <div class="info-item">
-                    <h3>RTSP URL</h3>
-                    <p style="font-size: 14px; word-break: break-all;">
-                        {{ config.rtsp_url if config.rtsp_url else 'Not configured' }}
-                    </p>
-                </div>
-                <div class="info-item">
-                    <h3>Detection Zone</h3>
-                    <p>{{ config.polygon|length }} points</p>
-                </div>
-                <div class="info-item">
-                    <h3>Target Point</h3>
-                    <p>({{ config.point[0] }}, {{ config.point[1] }})</p>
-                </div>
-                <div class="info-item">
-                    <h3>Max Distance</h3>
-                    <p>{{ config.max_dist }} px</p>
-                </div>
-            </div>
-            <div class="button-group" style="margin-top: 20px;">
-                <a href="{{ url_for('config_page') }}" class="btn">⚙️ Configure Settings</a>
-            </div>
-        </div>
-
-        <div class="footer">
-            <p>Person Detection System | Powered by YOLOv11 & Flask</p>
-        </div>
+        <footer style="text-align: center; color: rgba(255,255,255,0.85); font-size: 0.85rem;">
+            Person Detection System · Powered by YOLOv11 & Flask · {{ datetime.utcnow().strftime('%Y') }}
+        </footer>
     </div>
+
+    <script id="config-data" type="application/json">{{ config_json|safe }}</script>
+    <script>
+        (function() {
+            const configDataElement = document.getElementById('config-data');
+            const initialConfig = JSON.parse(configDataElement.textContent || '{}');
+
+            const state = {
+                editMode: false,
+                polygon: (initialConfig.polygon || []).map(([x, y]) => ({ x, y })),
+                point: (() => {
+                    if (Array.isArray(initialConfig.point) && initialConfig.point.length >= 2) {
+                        return { x: initialConfig.point[0], y: initialConfig.point[1] };
+                    }
+                    return { x: 320, y: 240 };
+                })(),
+                maxDist: initialConfig.max_dist || 200,
+                frame: initialConfig.frame || { width: 640, height: 480 },
+                dragging: null,
+            };
+
+            const video = document.getElementById('video-stream');
+            const canvas = document.getElementById('overlay-canvas');
+            const ctx = canvas.getContext('2d');
+            const toggleEditBtn = document.getElementById('toggle-edit');
+            const resetGeometryBtn = document.getElementById('reset-geometry');
+            const editBanner = document.getElementById('edit-banner');
+            const statusMessage = document.getElementById('status-message');
+            const form = document.getElementById('config-form');
+            const rtspInput = document.getElementById('rtsp-url');
+            const maxDistInput = document.getElementById('max-dist');
+            const polygonOutput = document.getElementById('polygon-coords');
+            const targetOutput = document.getElementById('target-point');
+
+            function clamp(value, min, max) {
+                return Math.min(Math.max(value, min), max);
+            }
+
+            function syncCanvasSize() {
+                const rect = video.getBoundingClientRect();
+                if (!rect.width || !rect.height) {
+                    canvas.width = state.frame.width || 640;
+                    canvas.height = state.frame.height || 480;
+                    return;
+                }
+                const aspectRatio = (state.frame.width || 640) / (state.frame.height || 480);
+                const calculatedHeight = rect.width / aspectRatio;
+                canvas.width = state.frame.width || 640;
+                canvas.height = state.frame.height || 480;
+                canvas.style.width = `${rect.width}px`;
+                canvas.style.height = `${calculatedHeight}px`;
+            }
+
+            function polygonToString() {
+                return state.polygon.map((pt) => `(${Math.round(pt.x)}, ${Math.round(pt.y)})`).join(' ');
+            }
+
+            function pointToString() {
+                return `(${Math.round(state.point.x)}, ${Math.round(state.point.y)})`;
+            }
+
+            function updateTextOutputs() {
+                polygonOutput.value = polygonToString();
+                targetOutput.value = pointToString();
+            }
+
+            function drawOverlay() {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                if (!state.editMode) {
+                    return;
+                }
+
+                if (state.polygon.length >= 2) {
+                    ctx.strokeStyle = 'rgba(102, 126, 234, 0.9)';
+                    ctx.fillStyle = 'rgba(102, 126, 234, 0.15)';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    state.polygon.forEach((pt, idx) => {
+                        if (idx === 0) {
+                            ctx.moveTo(pt.x, pt.y);
+                        } else {
+                            ctx.lineTo(pt.x, pt.y);
+                        }
+                    });
+                    ctx.closePath();
+                    ctx.fill();
+                    ctx.stroke();
+
+                    state.polygon.forEach((pt) => {
+                        ctx.beginPath();
+                        ctx.fillStyle = '#f56565';
+                        ctx.arc(pt.x, pt.y, 8, 0, Math.PI * 2);
+                        ctx.fill();
+                        ctx.strokeStyle = '#ffffff';
+                        ctx.lineWidth = 1.5;
+                        ctx.stroke();
+                    });
+                }
+
+                ctx.beginPath();
+                ctx.fillStyle = '#38a169';
+                ctx.arc(state.point.x, state.point.y, 10, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+
+            function setStatus(message, isError = false) {
+                statusMessage.textContent = message;
+                statusMessage.className = `status-message ${isError ? 'status-error' : 'status-success'}`;
+            }
+
+            function clearStatus() {
+                statusMessage.textContent = '';
+                statusMessage.className = 'status-message';
+            }
+
+            function getCanvasCoordinates(evt) {
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                return {
+                    x: clamp((evt.clientX - rect.left) * scaleX, 0, canvas.width),
+                    y: clamp((evt.clientY - rect.top) * scaleY, 0, canvas.height),
+                };
+            }
+
+            function findVertexAt(position, radius = 12) {
+                for (let i = 0; i < state.polygon.length; i += 1) {
+                    const pt = state.polygon[i];
+                    const dist = Math.hypot(pt.x - position.x, pt.y - position.y);
+                    if (dist <= radius) {
+                        return i;
+                    }
+                }
+                return -1;
+            }
+
+            function findEdgeIndexNear(position) {
+                if (state.polygon.length < 2) return -1;
+                let closestIndex = -1;
+                let closestDistance = Infinity;
+
+                function distancePointToSegment(p, v, w) {
+                    const l2 = Math.pow(w.x - v.x, 2) + Math.pow(w.y - v.y, 2);
+                    if (l2 === 0) return Math.hypot(p.x - v.x, p.y - v.y);
+                    let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+                    t = Math.max(0, Math.min(1, t));
+                    const projection = { x: v.x + t * (w.x - v.x), y: v.y + t * (w.y - v.y) };
+                    return Math.hypot(p.x - projection.x, p.y - projection.y);
+                }
+
+                for (let i = 0; i < state.polygon.length; i += 1) {
+                    const start = state.polygon[i];
+                    const end = state.polygon[(i + 1) % state.polygon.length];
+                    const distance = distancePointToSegment(position, start, end);
+                    if (distance < closestDistance) {
+                        closestDistance = distance;
+                        closestIndex = i;
+                    }
+                }
+
+                return closestIndex;
+            }
+
+            function enterEditMode() {
+                state.editMode = true;
+                canvas.classList.add('editable');
+                editBanner.classList.add('active');
+                toggleEditBtn.textContent = 'Disable Edit Mode';
+                toggleEditBtn.classList.replace('btn-ghost', 'btn-primary');
+                drawOverlay();
+            }
+
+            function exitEditMode() {
+                state.editMode = false;
+                canvas.classList.remove('editable');
+                editBanner.classList.remove('active');
+                toggleEditBtn.textContent = 'Enable Edit Mode';
+                toggleEditBtn.classList.replace('btn-primary', 'btn-ghost');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+
+            function applyConfig(configResult) {
+                if (!configResult || !configResult.config) return;
+                const cfg = configResult.config;
+                state.polygon = (cfg.polygon || []).map(([x, y]) => ({ x, y }));
+                if (Array.isArray(cfg.point) && cfg.point.length >= 2) {
+                    state.point = { x: cfg.point[0], y: cfg.point[1] };
+                }
+                state.maxDist = cfg.max_dist || state.maxDist;
+                state.frame = cfg.frame || state.frame;
+                rtspInput.value = cfg.rtsp_url || '';
+                maxDistInput.value = state.maxDist;
+                updateTextOutputs();
+                syncCanvasSize();
+                drawOverlay();
+            }
+
+            function fetchConfigAndEnterEdit() {
+                fetch('/config')
+                    .then((response) => response.json())
+                    .then((data) => {
+                        if (data.status === 'ok') {
+                            applyConfig(data);
+                            enterEditMode();
+                        } else {
+                            setStatus(data.message || 'Unable to load configuration', true);
+                        }
+                    })
+                    .catch(() => {
+                        setStatus('Failed to communicate with the server.', true);
+                    });
+            }
+
+            function resetGeometry() {
+                const width = state.frame.width || 640;
+                const height = state.frame.height || 480;
+                state.polygon = [
+                    { x: width * 0.1, y: height * 0.2 },
+                    { x: width * 0.9, y: height * 0.2 },
+                    { x: width * 0.9, y: height * 0.8 },
+                    { x: width * 0.1, y: height * 0.8 },
+                ];
+                state.point = { x: width / 2, y: height / 2 };
+                updateTextOutputs();
+                drawOverlay();
+            }
+
+            function enableDragHandlers() {
+                canvas.addEventListener('mousedown', (event) => {
+                    if (!state.editMode || event.button !== 0) {
+                        return;
+                    }
+                    const pos = getCanvasCoordinates(event);
+                    const vertexIndex = findVertexAt(pos);
+                    if (vertexIndex !== -1) {
+                        state.dragging = { type: 'vertex', index: vertexIndex };
+                    } else if (Math.hypot(state.point.x - pos.x, state.point.y - pos.y) <= 14) {
+                        state.dragging = { type: 'target' };
+                    }
+                });
+
+                canvas.addEventListener('mousemove', (event) => {
+                    if (!state.editMode || !state.dragging) {
+                        return;
+                    }
+                    const pos = getCanvasCoordinates(event);
+                    if (state.dragging.type === 'vertex') {
+                        const idx = state.dragging.index;
+                        state.polygon[idx].x = pos.x;
+                        state.polygon[idx].y = pos.y;
+                    } else if (state.dragging.type === 'target') {
+                        state.point.x = pos.x;
+                        state.point.y = pos.y;
+                    }
+                    updateTextOutputs();
+                    drawOverlay();
+                });
+
+                ['mouseup', 'mouseleave'].forEach((eventName) => {
+                    canvas.addEventListener(eventName, () => {
+                        state.dragging = null;
+                    });
+                });
+
+                canvas.addEventListener('contextmenu', (event) => {
+                    if (!state.editMode) {
+                        return;
+                    }
+                    event.preventDefault();
+                    const pos = getCanvasCoordinates(event);
+                    const edgeIndex = findEdgeIndexNear(pos);
+                    if (edgeIndex !== -1) {
+                        state.polygon.splice(edgeIndex + 1, 0, { x: pos.x, y: pos.y });
+                        updateTextOutputs();
+                        drawOverlay();
+                    }
+                });
+            }
+
+            toggleEditBtn.addEventListener('click', () => {
+                clearStatus();
+                if (!state.editMode) {
+                    fetchConfigAndEnterEdit();
+                } else {
+                    exitEditMode();
+                }
+            });
+
+            resetGeometryBtn.addEventListener('click', () => {
+                if (!state.editMode) {
+                    fetch('/config')
+                        .then((response) => response.json())
+                        .then((data) => {
+                            if (data.status === 'ok') {
+                                applyConfig(data);
+                                setStatus('Geometry refreshed from saved configuration.');
+                            } else {
+                                setStatus(data.message || 'Unable to refresh geometry.', true);
+                            }
+                        })
+                        .catch(() => setStatus('Failed to refresh configuration.', true));
+                } else {
+                    resetGeometry();
+                    setStatus('Geometry reset inside edit mode. Remember to save.', false);
+                }
+            });
+
+            form.addEventListener('submit', (event) => {
+                event.preventDefault();
+                clearStatus();
+
+                const payload = {
+                    rtsp_url: rtspInput.value.trim(),
+                    max_dist: parseInt(maxDistInput.value, 10) || state.maxDist,
+                    polygon: state.polygon.map((pt) => [Math.round(pt.x), Math.round(pt.y)]),
+                    point: [Math.round(state.point.x), Math.round(state.point.y)],
+                };
+
+                fetch('/config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(payload),
+                })
+                    .then((response) => response.json())
+                    .then((data) => {
+                        if (data.status === 'ok') {
+                            applyConfig(data);
+                            setStatus('Configuration saved successfully.');
+                        } else {
+                            setStatus(data.message || 'Unable to save configuration.', true);
+                        }
+                    })
+                    .catch(() => setStatus('Configuration save failed. Check connectivity.', true));
+            });
+
+            video.addEventListener('load', () => {
+                syncCanvasSize();
+                drawOverlay();
+            });
+
+            window.addEventListener('resize', () => {
+                syncCanvasSize();
+                drawOverlay();
+            });
+
+            enableDragHandlers();
+            applyConfig({ config: initialConfig, status: 'ok' });
+            updateTextOutputs();
+            syncCanvasSize();
+            drawOverlay();
+        })();
+    </script>
 </body>
 </html>

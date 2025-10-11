@@ -9,8 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Introduced RTSP reachability pre-checks and offline placeholder frames when streams are unavailable. (What: Added connectivity helper and offline frame generation in application code and templates; Why: Avoid UI freezes when the configured RTSP stream is offline; Impact: Users receive immediate feedback while keeping the app responsive; Links: Internal issue report (accessed 2025-10-11T03:21:46Z); Rollback: Revert connectivity helper and placeholder changes).
+- Enabled inline editing of stream URL, detection polygon, and target point directly on the main page via an interactive overlay. (What: Replace separate config page with single-page configuration UI; Why: Simplify UX when the stream is offline and `/config` route is unreachable; Impact: Users can tweak settings without leaving the main view; Links: Internal follow-up request (accessed 2025-10-11T04:06:34Z); Rollback: Revert combined UI changes).
 
 ### Changed
+- Replaced `/config` navigation flow with inline controls and edit mode toggle on the landing page. (What: Home template/form adjustments and AJAX handlers; Why: Clicking `Config` previously failed when the stream was unresponsive; Impact: Users manage configuration in-place; Links: Internal follow-up request (accessed 2025-10-11T04:06:34Z); Rollback: Restore prior templates and routes).
+- Updated README with clarified app purpose and usage instructions while removing redundant sandbox warning. (What: Documentation edits; Why: Align docs with new UX and features; Impact: Clearer onboarding instructions; Links: Internal follow-up request (accessed 2025-10-11T04:06:34Z); Rollback: Revert README changes).
 - Normalized polygon configuration handling and moved polygon formatting logic into the Flask view to prevent template syntax errors. (What: Adjusted config serialization/deserialization and view context data; Why: Ensure `/config` renders even with complex polygon data; Impact: Stable configuration page rendering; Links: Internal issue report (accessed 2025-10-11T03:21:46Z); Rollback: Revert config handling and template updates).
 
 ### Removed
