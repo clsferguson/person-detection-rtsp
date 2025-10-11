@@ -16,6 +16,7 @@ if [ ! -f /app/config/config.json ]; then
     cp /app/config/config.json.example /app/config/config.json
 fi
 
+mkdir -p /app/ultralytics && export YOLO_CONFIG_DIR=/app/ultralytics
 echo "Downloading YOLO model..."
 python3 -c "from ultralytics import YOLO; YOLO('yolo11n.pt')"
 
