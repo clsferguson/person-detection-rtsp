@@ -159,7 +159,7 @@
                 <div class="form-group">
                     <label for="polygon">📐 Detection Zone Polygon</label>
                     <input type="text" id="polygon" name="polygon" 
-                           value="{{ ' '.join('(' + (x|string) + ',' + (y|string) + ')' for x,y in config.polygon) }}">
+                           value="{{ polygon_display }}">
                     <p class="form-help">Space-separated coordinate pairs defining the detection zone</p>
                     <div class="example-box">
                         <h4>📝 Examples:</h4>
@@ -171,7 +171,7 @@
                 <div class="form-group">
                     <label for="point">🎯 Target Reference Point</label>
                     <input type="text" id="point" name="point" 
-                           value="({{ config.point[0] }},{{ config.point[1] }})">
+                           value="{{ point_display }}">
                     <p class="form-help">The point from which proximity is measured (x,y)</p>
                     <div class="example-box">
                         <h4>📝 Examples:</h4>
