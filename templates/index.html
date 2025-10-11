@@ -158,6 +158,66 @@
             gap: 18px;
         }
 
+        .metric-card {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            border: 1px solid rgba(113, 128, 150, 0.25);
+            border-radius: 14px;
+            padding: 18px;
+            background: rgba(247, 250, 252, 0.9);
+        }
+
+        .metric-card h3 {
+            font-size: 1rem;
+            color: #2d3748;
+        }
+
+        .metric-value {
+            font-size: 2.4rem;
+            font-weight: 700;
+            letter-spacing: 1px;
+            color: #2d3748;
+        }
+
+        .metric-subtext {
+            font-size: 0.85rem;
+            color: #4a5568;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .metric-indicator {
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            width: fit-content;
+        }
+
+        .metric-indicator.good {
+            background: rgba(72, 187, 120, 0.12);
+            color: #276749;
+        }
+
+        .metric-indicator.idle {
+            background: rgba(113, 128, 150, 0.18);
+            color: #2d3748;
+        }
+
+        .metric-indicator.warn {
+            background: rgba(237, 137, 54, 0.18);
+            color: #9c4221;
+        }
+
+        .metric-indicator.error {
+            background: rgba(229, 62, 62, 0.18);
+            color: #9b2c2c;
+        }
+
         label {
             font-size: 0.85rem;
             font-weight: 700;
@@ -295,19 +355,25 @@
             <aside class="panel">
                 <h2 style="margin-bottom: 16px; color: #2d3748;">Configuration</h2>
                 <div id="status-message" class="status-message"></div>
+
+                <div class="metric-card" id="proximity-card">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <h3>Proximity Score</h3>
+                        <span id="proximity-indicator" class="metric-indicator idle">Idle</span>
+                    </div>
+                    <div id="proximity-value" class="metric-value">--</div>
+                    <div class="metric-subtext">
+                        <span id="proximity-distance">Distance: --</span>
+                        <span id="proximity-updated">Updated: --</span>
+                        <span id="proximity-max">Auto max distance: --</span>
+                    </div>
+                </div>
                 <form id="config-form">
                     <div>
                         <label for="rtsp-url">RTSP Stream URL</label>
                         <input type="text" id="rtsp-url" name="rtsp_url" placeholder="rtsp://user:pass@host:port/stream" autocomplete="off">
                         <p class="hint">The application checks connectivity before attempting to stream. Provide a reachable RTSP endpoint for live detections.</p>
                     </div>
-
-                    <div>
-                        <label for="max-dist">Maximum Distance (pixels)</label>
-                        <input type="number" id="max-dist" name="max_dist" min="1" step="1">
-                        <p class="hint">Distances are scaled so the polygon boundary reports ~0 and the target point reports ~1000.</p>
-                    </div>
-
                     <div>
                         <label for="polygon-coords">Polygon Vertices</label>
                         <textarea id="polygon-coords" readonly></textarea>
@@ -346,7 +412,8 @@
                     }
                     return { x: 320, y: 240 };
                 })(),
-                maxDist: initialConfig.max_dist || 200,
+                autoMaxDist: initialConfig.auto_max_dist || 1,
+                lastMetrics: null,
                 frame: initialConfig.frame || { width: 640, height: 480 },
                 dragging: null,
             };
@@ -354,17 +421,75 @@
             const video = document.getElementById('video-stream');
             const canvas = document.getElementById('overlay-canvas');
             const ctx = canvas.getContext('2d');
-            const toggleEditBtn = document.getElementById('toggle-edit');
+
+                        const toggleEditBtn = document.getElementById('toggle-edit');
             const resetGeometryBtn = document.getElementById('reset-geometry');
             const editBanner = document.getElementById('edit-banner');
             const statusMessage = document.getElementById('status-message');
             const form = document.getElementById('config-form');
             const rtspInput = document.getElementById('rtsp-url');
-            const maxDistInput = document.getElementById('max-dist');
             const polygonOutput = document.getElementById('polygon-coords');
             const targetOutput = document.getElementById('target-point');
 
-            function clamp(value, min, max) {
+            const proximityValue = document.getElementById('proximity-value');
+            const proximityIndicator = document.getElementById('proximity-indicator');
+            const proximityDistance = document.getElementById('proximity-distance');
+            const proximityUpdated = document.getElementById('proximity-updated');
+            const proximityMax = document.getElementById('proximity-max');
+            initializeMetricsChannel();
+
+    
+        function formatTimestamp(ts) {
+            if (!ts) return '--';
+            try {
+                const date = new Date(ts);
+                if (Number.isNaN(date.getTime())) return ts;
+                return `${date.toLocaleTimeString()} (${date.toLocaleDateString()})`;
+            } catch (err) {
+                return ts;
+            }
+        }
+
+        function updateMetricsCard(data) {
+            if (!data) return;
+            const proximity = data.proximity || {};
+            const score = typeof proximity.score === 'number' ? Math.round(proximity.score) : null;
+
+            if (score === null) {
+                proximityValue.textContent = '--';
+                proximityIndicator.textContent = 'Idle';
+                proximityIndicator.className = 'metric-indicator idle';
+            } else {
+                proximityValue.textContent = score;
+                if (score >= 750) {
+                    proximityIndicator.textContent = 'Very Close';
+                    proximityIndicator.className = 'metric-indicator error';
+                } else if (score >= 500) {
+                    proximityIndicator.textContent = 'Close';
+                    proximityIndicator.className = 'metric-indicator warn';
+                } else if (score > 0) {
+                    proximityIndicator.textContent = 'Detected';
+                    proximityIndicator.className = 'metric-indicator good';
+                } else {
+                    proximityIndicator.textContent = 'No Detection';
+                    proximityIndicator.className = 'metric-indicator idle';
+                }
+            }
+
+            if (typeof proximity.raw_distance === 'number') {
+                proximityDistance.textContent = `Distance: ${proximity.raw_distance.toFixed(1)} px`;
+            } else {
+                proximityDistance.textContent = 'Distance: --';
+            }
+
+            if (typeof proximity.max_distance === 'number') {
+                proximityMax.textContent = `Auto max distance: ${Math.round(proximity.max_distance)} px`;
+            }
+
+            const updatedTs = proximity.timestamp || data.last_frame_ts;
+            proximityUpdated.textContent = `Updated: ${formatTimestamp(updatedTs)}`;
+        }
+        function clamp(value, min, max) {
                 return Math.min(Math.max(value, min), max);
             }
 
@@ -383,7 +508,54 @@
                 canvas.style.height = `${calculatedHeight}px`;
             }
 
-            function polygonToString() {
+    
+        async function fetchMetricsOnce() {
+            try {
+                const response = await fetch('/metrics');
+                if (!response.ok) return;
+                const data = await response.json();
+                updateMetricsCard(data);
+            } catch (error) {
+                console.debug('Metrics fetch failed', error);
+            }
+        }
+
+        function startSSE() {
+            if (!window.EventSource) {
+                console.warn('SSE not supported, falling back to polling');
+                latestMetrics = null;
+                return false;
+            }
+
+            try {
+                const source = new EventSource('/events/metrics');
+                source.onmessage = (event) => {
+                    try {
+                        const payload = JSON.parse(event.data);
+                        updateMetricsCard(payload);
+                    } catch (parseErr) {
+                        console.debug('Failed to parse SSE payload', parseErr);
+                    }
+                };
+                source.onerror = () => {
+                    console.warn('SSE connection lost, closing and falling back to polling');
+                    source.close();
+                    setInterval(fetchMetricsOnce, 1000);
+                };
+                return true;
+            } catch (err) {
+                console.warn('SSE initialization failed', err);
+                return false;
+            }
+        }
+
+        function initializeMetricsChannel() {
+            const sseEnabled = startSSE();
+            if (!sseEnabled) {
+                setInterval(fetchMetricsOnce, 1000);
+            }
+        }
+        function polygonToString() {
                 return state.polygon.map((pt) => `(${Math.round(pt.x)}, ${Math.round(pt.y)})`).join(' ');
             }
 
@@ -394,6 +566,7 @@
             function updateTextOutputs() {
                 polygonOutput.value = polygonToString();
                 targetOutput.value = pointToString();
+                proximityMax.textContent = `Auto max distance: ${Math.round(state.autoMaxDist)}`;
             }
 
             function drawOverlay() {
@@ -521,13 +694,15 @@
                 if (Array.isArray(cfg.point) && cfg.point.length >= 2) {
                     state.point = { x: cfg.point[0], y: cfg.point[1] };
                 }
-                state.maxDist = cfg.max_dist || state.maxDist;
                 state.frame = cfg.frame || state.frame;
+                state.autoMaxDist = cfg.auto_max_dist || state.autoMaxDist;
                 rtspInput.value = cfg.rtsp_url || '';
-                maxDistInput.value = state.maxDist;
                 updateTextOutputs();
                 syncCanvasSize();
                 drawOverlay();
+                if (state.lastMetrics) {
+                    updateMetricsCard(state.lastMetrics);
+                }
             }
 
             function fetchConfigAndEnterEdit() {
@@ -646,7 +821,6 @@
 
                 const payload = {
                     rtsp_url: rtspInput.value.trim(),
-                    max_dist: parseInt(maxDistInput.value, 10) || state.maxDist,
                     polygon: state.polygon.map((pt) => [Math.round(pt.x), Math.round(pt.y)]),
                     point: [Math.round(state.point.x), Math.round(state.point.y)],
                 };

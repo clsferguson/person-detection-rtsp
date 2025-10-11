@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
+import math
 import os
 import socket
 import sys
 import time
 from datetime import datetime
-from typing import Dict, Iterable, List, Tuple, Union
+from threading import Event, Lock, Thread
+from typing import Dict, Iterable, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import cv2
 import numpy as np
 from flask import Flask, Response, jsonify, render_template, request
+from gevent import sleep
 from gevent.pywsgi import WSGIServer
 from ultralytics import YOLO
 
@@ -27,15 +31,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__, template_folder='../templates')
-model = None
+
+MODEL_DEVICE = os.environ.get('YOLO_DEVICE')
+PERSON_CLASS_ID = 0
+FRAME_INTERVAL_SECONDS = 0.2  # 5 FPS
+PROXIMITY_SCALE = 1000.0
+
+CONFIG_LOCK = Lock()
 config: Dict[str, object] = {
     'rtsp_url': '',
     'polygon': [(0, 0), (640, 0), (640, 480), (0, 480)],
     'point': (320, 240),
-    'max_dist': 200,
     'frame_width': 640,
     'frame_height': 480,
 }
+
+model: Optional[YOLO] = None
+_detection_worker: Optional['DetectionWorker'] = None
 
 
 def normalize_polygon(points: Iterable[Iterable[Union[int, float]]]) -> List[Tuple[int, int]]:
@@ -64,56 +76,115 @@ def normalize_point(point: Union[Iterable[Union[int, float]], Dict[str, Union[in
     raise ValueError(f"Invalid point value: {point}")  # pragma: no cover - defensive guard
 
 
+def polygon_centroid(points: List[Tuple[int, int]]) -> Tuple[int, int]:
+    """Calculate the centroid of a polygon using the shoelace formula."""
+    if len(points) < 3:
+        return (0, 0)
+
+    area = 0.0
+    cx = 0.0
+    cy = 0.0
+    for i in range(len(points)):
+        x1, y1 = points[i]
+        x2, y2 = points[(i + 1) % len(points)]
+        cross = x1 * y2 - x2 * y1
+        area += cross
+        cx += (x1 + x2) * cross
+        cy += (y1 + y2) * cross
+
+    area *= 0.5
+    if abs(area) < 1e-6:
+        avg_x = sum(p[0] for p in points) / len(points)
+        avg_y = sum(p[1] for p in points) / len(points)
+        return int(round(avg_x)), int(round(avg_y))
+
+    cx /= (6.0 * area)
+    cy /= (6.0 * area)
+    return int(round(cx)), int(round(cy))
+
+
+def is_point_inside_polygon(point: Tuple[int, int], polygon: List[Tuple[int, int]]) -> bool:
+    if len(polygon) < 3:
+        return False
+    poly = np.array(polygon, np.int32)
+    result = cv2.pointPolygonTest(poly, (float(point[0]), float(point[1])), False)
+    return result >= 0
+
+
+def compute_auto_max_distance(point: Tuple[int, int], polygon: List[Tuple[int, int]]) -> float:
+    if len(polygon) < 3:
+        return 1.0
+    distances = [math.dist(point, vertex) for vertex in polygon]
+    max_dist = max(distances) if distances else 1.0
+    return max(max_dist, 1.0)
+
+
+def _recalculate_geometry_locked() -> List[str]:
+    """Recalculate derived geometry fields while holding CONFIG_LOCK."""
+    warnings: List[str] = []
+    polygon: List[Tuple[int, int]] = config.get('polygon', [])  # type: ignore[assignment]
+    point: Tuple[int, int] = config.get('point', (0, 0))  # type: ignore[assignment]
+
+    if not polygon or len(polygon) < 3:
+        warnings.append('Polygon must contain at least three points; using default rectangle.')
+        config['polygon'] = [(0, 0), (640, 0), (640, 480), (0, 480)]
+        polygon = config['polygon']  # type: ignore[assignment]
+
+    if not is_point_inside_polygon(point, polygon):
+        centroid = polygon_centroid(polygon)
+        warnings.append('Target point adjusted to polygon centroid to remain inside zone.')
+        config['point'] = centroid
+        point = centroid
+
+    config['auto_max_dist'] = compute_auto_max_distance(point, polygon)
+    return warnings
+
+
 def serialize_config() -> Dict[str, object]:
     """Return the current configuration in a JSON-safe structure."""
+    with CONFIG_LOCK:
+        snapshot = copy.deepcopy(config)
     return {
-        'rtsp_url': config.get('rtsp_url', ''),
-        'polygon': [list(pt) for pt in config.get('polygon', [])],
-        'point': list(config.get('point', (0, 0))),
-        'max_dist': config.get('max_dist', 200),
+        'rtsp_url': snapshot.get('rtsp_url', ''),
+        'polygon': [list(pt) for pt in snapshot.get('polygon', [])],
+        'point': list(snapshot.get('point', (0, 0))),
         'frame': {
-            'width': config.get('frame_width', 640),
-            'height': config.get('frame_height', 480),
+            'width': snapshot.get('frame_width', 640),
+            'height': snapshot.get('frame_height', 480),
         },
+        'auto_max_dist': snapshot.get('auto_max_dist', 1.0),
     }
 
 
-def update_config(new_config: Dict[str, object]) -> None:
+def update_config(new_config: Dict[str, object]) -> List[str]:
     """Merge new configuration values and normalize collections."""
-    global config
-    config.update(new_config)
-    if 'polygon' in config and config['polygon']:
-        config['polygon'] = normalize_polygon(config['polygon'])  # type: ignore[arg-type]
-    if 'point' in config:
-        config['point'] = normalize_point(config['point'])  # type: ignore[arg-type]
-    if 'max_dist' in config:
-        config['max_dist'] = max(int(config['max_dist']), 1)
+    warnings: List[str] = []
+    with CONFIG_LOCK:
+        if 'rtsp_url' in new_config:
+            config['rtsp_url'] = str(new_config['rtsp_url']).strip()
+
+        if 'polygon' in new_config and new_config['polygon']:
+            config['polygon'] = normalize_polygon(new_config['polygon'])  # type: ignore[arg-type]
+
+        if 'point' in new_config:
+            config['point'] = normalize_point(new_config['point'])  # type: ignore[arg-type]
+
+        warnings.extend(_recalculate_geometry_locked())
+
+    return warnings
 
 
 def save_config(config_path: str = 'config/config.json') -> None:
     """Persist the current configuration to disk."""
     os.makedirs(os.path.dirname(config_path), exist_ok=True)
-    payload = {
-        'rtsp_url': config['rtsp_url'],
-        'polygon': [list(pt) for pt in config['polygon']],
-        'point': list(config['point']),
-        'max_dist': config['max_dist'],
-    }
+    with CONFIG_LOCK:
+        payload = {
+            'rtsp_url': config['rtsp_url'],
+            'polygon': [list(pt) for pt in config['polygon']],
+            'point': list(config['point']),
+        }
     with open(config_path, 'w', encoding='utf-8') as file:
         json.dump(payload, file, indent=2)
-
-
-def load_model() -> bool:
-    """Load the YOLO model with error handling."""
-    global model
-    try:
-        logger.info("Loading YOLO model...")
-        model = YOLO('yolo11n.pt')
-        logger.info("✓ YOLO model loaded successfully")
-        return True
-    except Exception as exc:  # pragma: no cover - logging path
-        logger.error(f"✗ Failed to load YOLO model: {exc}")
-        return False
 
 
 def load_config(config_path: str = 'config/config.json') -> None:
@@ -122,13 +193,329 @@ def load_config(config_path: str = 'config/config.json') -> None:
         try:
             with open(config_path, encoding='utf-8') as file:
                 loaded = json.load(file)
-            update_config(loaded)
+            warnings = update_config(loaded)
             logger.info(f"✓ Configuration loaded from {config_path}")
-            logger.info(f"  RTSP URL: {config['rtsp_url'] or '(not configured)'}")
+            logger.info(f"  RTSP URL: {config.get('rtsp_url') or '(not configured)'}")
+            for warning in warnings:
+                logger.warning(f"  ⚠ {warning}")
         except Exception as exc:  # pragma: no cover - logging path
             logger.error(f"✗ Failed to load config: {exc}")
     else:
         logger.warning(f"⚠ Config file not found: {config_path}")
+
+
+def can_connect_rtsp(rtsp_url: str, timeout: float = 3.0) -> bool:
+    """Perform a lightweight TCP connectivity check for an RTSP endpoint."""
+    parsed = urlparse(rtsp_url)
+    if parsed.scheme not in {'rtsp', 'rtsps'}:
+        logger.warning(f"Unsupported RTSP scheme: {parsed.scheme}")
+        return False
+    if not parsed.hostname:
+        logger.warning("RTSP URL missing hostname")
+        return False
+
+    port = parsed.port or (322 if parsed.scheme == 'rtsps' else 554)
+    try:
+        with socket.create_connection((parsed.hostname, port), timeout=timeout):
+            return True
+    except OSError as exc:
+        logger.warning(
+            "RTSP connectivity check failed for %s:%s (%s)",
+            parsed.hostname,
+            port,
+            exc,
+        )
+        return False
+
+
+def update_frame_dimensions(width: int, height: int) -> None:
+    with CONFIG_LOCK:
+        config['frame_width'] = width
+        config['frame_height'] = height
+
+
+def get_auto_max_distance() -> float:
+    with CONFIG_LOCK:
+        return float(config.get('auto_max_dist', 1.0))
+
+
+def resolve_model_paths() -> Tuple[str, Optional[str]]:
+    weights = os.environ.get('YOLO_WEIGHTS', 'yolo11n.pt')
+    engine_env = os.environ.get('YOLO_ENGINE')
+    engine_candidate: Optional[str] = None
+
+    if engine_env:
+        engine_candidate = engine_env
+    else:
+        root, ext = os.path.splitext(weights)
+        if ext.lower() == '.pt':
+            candidate = root + '.engine'
+            if os.path.exists(candidate):
+                engine_candidate = candidate
+
+    return weights, engine_candidate
+
+
+def load_model() -> bool:
+    """Load the YOLO model with optional TensorRT engine."""
+    global model
+    weights_path, engine_path = resolve_model_paths()
+    prefer_trt = os.environ.get('ENABLE_TRT', '0') == '1'
+
+    try:
+        if prefer_trt and engine_path and os.path.exists(engine_path):
+            logger.info("Loading YOLO TensorRT engine: %s", engine_path)
+            model = YOLO(engine_path)
+        else:
+            if prefer_trt and engine_path and not os.path.exists(engine_path):
+                logger.warning("TensorRT engine requested but not found: %s", engine_path)
+            logger.info("Loading YOLO model: %s", weights_path)
+            model = YOLO(weights_path)
+            if MODEL_DEVICE:
+                try:
+                    model.to(MODEL_DEVICE)
+                except Exception as exc:  # pragma: no cover - logging path
+                    logger.warning(f"Could not move model to device {MODEL_DEVICE}: {exc}")
+        logger.info("✓ YOLO model loaded successfully")
+        return True
+    except Exception as exc:  # pragma: no cover - logging path
+        logger.error(f"✗ Failed to load YOLO model: {exc}")
+        model = None
+        return False
+
+
+class DetectionWorker:
+    """Background worker that handles frame retrieval, inference, and metric updates."""
+
+    def __init__(self) -> None:
+        self._thread: Optional[Thread] = None
+        self._stop_event = Event()
+        self._frame_event = Event()
+        self._frame_lock = Lock()
+        self._metrics_lock = Lock()
+        self._latest_frame: Optional[bytes] = None
+        self._metrics: Dict[str, object] = self._empty_metrics('idle')
+        self._last_rtsp: Optional[str] = None
+
+    @staticmethod
+    def _empty_metrics(stream_status: str) -> Dict[str, object]:
+        return {
+            'stream_status': stream_status,
+            'last_frame_ts': None,
+            'proximity': {
+                'score': 0,
+                'raw_distance': None,
+                'max_distance': get_auto_max_distance(),
+                'normalized': 0.0,
+                'inside_polygon': False,
+                'timestamp': None,
+            },
+            'detection': None,
+            'rtsp_configured': False,
+        }
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = Thread(target=self._run, name='DetectionWorker', daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        if self._thread and self._thread.is_alive():
+            self._stop_event.set()
+            self._thread.join(timeout=2.0)
+
+    def get_frame(self, timeout: float = 1.0) -> Optional[bytes]:
+        if self._frame_event.wait(timeout):
+            with self._frame_lock:
+                frame = self._latest_frame
+            self._frame_event.clear()
+            return frame
+        return None
+
+    def get_metrics(self) -> Dict[str, object]:
+        with self._metrics_lock:
+            return copy.deepcopy(self._metrics)
+
+    def current_status(self) -> str:
+        with self._metrics_lock:
+            return str(self._metrics.get('stream_status', 'idle'))
+
+    def _set_metrics(self, metrics: Dict[str, object]) -> None:
+        with self._metrics_lock:
+            self._metrics = metrics
+
+    def _set_frame(self, frame_bytes: bytes) -> None:
+        with self._frame_lock:
+            self._latest_frame = frame_bytes
+        self._frame_event.set()
+
+    def _update_stream_status(self, status: str, rtsp_configured: bool) -> None:
+        metrics = self._empty_metrics(status)
+        metrics['rtsp_configured'] = rtsp_configured
+        self._set_metrics(metrics)
+
+    def _run(self) -> None:
+        global model
+        last_frame_emit = 0.0
+        while not self._stop_event.is_set():
+            if model is None:
+                self._update_stream_status('model_unloaded', False)
+                time.sleep(1.0)
+                continue
+
+            with CONFIG_LOCK:
+                current_rtsp = str(config.get('rtsp_url', '')).strip()
+            if not current_rtsp:
+                self._update_stream_status('unconfigured', False)
+                time.sleep(1.0)
+                continue
+
+            if not can_connect_rtsp(current_rtsp):
+                self._update_stream_status('unreachable', True)
+                time.sleep(2.0)
+                continue
+
+            logger.info("Opening RTSP stream: %s", current_rtsp)
+            cap = cv2.VideoCapture(current_rtsp)
+
+            if not cap.isOpened():
+                logger.error("✗ Failed to open RTSP stream")
+                self._update_stream_status('open_failed', True)
+                cap.release()
+                time.sleep(2.0)
+                continue
+
+            logger.info("✓ RTSP stream opened successfully")
+            self._update_stream_status('streaming', True)
+            self._last_rtsp = current_rtsp
+
+            try:
+                while not self._stop_event.is_set():
+                    ret, frame = cap.read()
+                    if not ret:
+                        logger.warning("Stream ended or failed to read frame")
+                        self._update_stream_status('read_failed', True)
+                        break
+
+                    now = time.time()
+                    if now - last_frame_emit < FRAME_INTERVAL_SECONDS:
+                        continue
+                    last_frame_emit = now
+
+                    cfg_snapshot = serialize_config()
+                    if cfg_snapshot['rtsp_url'] != current_rtsp:
+                        logger.info("RTSP URL changed; restarting stream reader")
+                        break
+
+                    processed_frame, metrics = self._process_frame(frame, cfg_snapshot)
+                    update_frame_dimensions(processed_frame.shape[1], processed_frame.shape[0])
+
+                    frame_bytes = encode_frame(processed_frame)
+                    self._set_frame(frame_bytes)
+
+                    metrics['last_frame_ts'] = datetime.utcnow().isoformat()
+                    metrics['rtsp_configured'] = True
+                    self._set_metrics(metrics)
+            except Exception as exc:  # pragma: no cover - logging path
+                logger.error(f"Error in detection worker: {exc}")
+            finally:
+                cap.release()
+                self._update_stream_status('idle', True)
+                time.sleep(0.5)
+
+    def _process_frame(
+        self,
+        frame: np.ndarray,
+        cfg_snapshot: Dict[str, object],
+    ) -> Tuple[np.ndarray, Dict[str, object]]:
+        polygon_points = [tuple(pt) for pt in cfg_snapshot.get('polygon', [])]
+        target_point = tuple(cfg_snapshot.get('point', (0, 0)))
+        auto_max = float(cfg_snapshot.get('auto_max_dist') or 1.0)
+        frame_draw = frame.copy()
+
+        poly_array = np.array(polygon_points, np.int32) if polygon_points else None
+        if poly_array is not None and len(poly_array) >= 3:
+            cv2.polylines(frame_draw, [poly_array.reshape((-1, 1, 2))], True, (255, 255, 0), 2)
+        cv2.circle(frame_draw, (int(target_point[0]), int(target_point[1])), 10, (0, 255, 255), -1)
+
+        best_score = 0.0
+        best_distance: Optional[float] = None
+        best_box: Optional[Tuple[int, int, int, int]] = None
+        best_conf: Optional[float] = None
+        inside_polygon = False
+
+        if model is not None:
+            results = model(
+                frame,
+                classes=[PERSON_CLASS_ID],
+                verbose=False,
+                device=MODEL_DEVICE or None,
+            )
+            for result in results:
+                for box in result.boxes:
+                    x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                    cx = (x1 + x2) / 2
+                    cy = (y1 + y2) / 2
+
+                    if poly_array is not None and cv2.pointPolygonTest(poly_array, (float(cx), float(cy)), False) >= 0:
+                        inside_polygon = True
+                        distance = math.dist(target_point, (cx, cy))
+                        normalized = max(0.0, min(1.0, 1 - (distance / auto_max)))
+                        score = normalized * PROXIMITY_SCALE
+                        if score > best_score:
+                            best_score = score
+                            best_distance = distance
+                            best_box = (int(x1), int(y1), int(x2), int(y2))
+                            best_conf = float(box.conf[0].item()) if box.conf is not None else None
+
+        if best_box:
+            cv2.rectangle(
+                frame_draw,
+                (best_box[0], best_box[1]),
+                (best_box[2], best_box[3]),
+                (0, 255, 0),
+                3,
+            )
+
+        score_int = int(round(best_score)) if best_score > 0 else 0
+        cv2.putText(
+            frame_draw,
+            f"Proximity: {score_int}",
+            (10, 35),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.2,
+            (0, 255, 0) if score_int > 0 else (255, 255, 255),
+            2,
+        )
+
+        metrics: Dict[str, object] = {
+            'stream_status': 'streaming',
+            'proximity': {
+                'score': score_int,
+                'raw_distance': best_distance,
+                'max_distance': auto_max,
+                'normalized': (best_score / PROXIMITY_SCALE) if best_score > 0 else 0.0,
+                'inside_polygon': inside_polygon and best_box is not None,
+                'timestamp': datetime.utcnow().isoformat(),
+            },
+            'detection': None,
+        }
+
+        if best_box:
+            metrics['detection'] = {
+                'bbox': {
+                    'x1': best_box[0],
+                    'y1': best_box[1],
+                    'x2': best_box[2],
+                    'y2': best_box[3],
+                },
+                'confidence': best_conf,
+                'centroid': {'x': (best_box[0] + best_box[2]) / 2, 'y': (best_box[1] + best_box[3]) / 2},
+            }
+
+        return frame_draw, metrics
 
 
 def encode_frame(frame: np.ndarray) -> bytes:
@@ -169,177 +556,51 @@ def build_message_frame(
     return frame
 
 
-def can_connect_rtsp(rtsp_url: str, timeout: float = 3.0) -> bool:
-    """Perform a lightweight TCP connectivity check for an RTSP endpoint."""
-    parsed = urlparse(rtsp_url)
-    if parsed.scheme not in {'rtsp', 'rtsps'}:
-        logger.warning(f"Unsupported RTSP scheme: {parsed.scheme}")
-        return False
-    if not parsed.hostname:
-        logger.warning("RTSP URL missing hostname")
-        return False
-
-    port = parsed.port or (322 if parsed.scheme == 'rtsps' else 554)
-    try:
-        with socket.create_connection((parsed.hostname, port), timeout=timeout):
-            return True
-    except OSError as exc:
-        logger.warning(
-            "RTSP connectivity check failed for %s:%s (%s)",
-            parsed.hostname,
-            port,
-            exc,
-        )
-        return False
+def get_detection_worker() -> DetectionWorker:
+    global _detection_worker
+    if _detection_worker is None:
+        _detection_worker = DetectionWorker()
+        _detection_worker.start()
+    return _detection_worker
 
 
 def gen_frames():
-    """Generate MJPEG frames from the configured RTSP stream."""
+    """Generate MJPEG frames using the detection worker output."""
+    placeholder = encode_frame(
+        build_message_frame(
+            [
+                'Waiting for stream...',
+                'Configure an RTSP URL to begin.',
+            ],
+            background_color=(20, 20, 20),
+        )
+    )
+
     while True:
-        rtsp_url = str(config.get('rtsp_url', '') or '').strip()
-
-        if not rtsp_url:
-            frame_bytes = encode_frame(
-                build_message_frame(
-                    [
-                        'No RTSP stream configured',
-                        'Enable edit mode to set a stream URL.',
-                    ],
-                    background_color=(20, 20, 20),
-                )
-            )
-            yield format_mjpeg_frame(frame_bytes)
-            time.sleep(1.5)
+        worker = get_detection_worker()
+        frame_bytes = worker.get_frame(timeout=1.0)
+        if frame_bytes is None:
+            yield format_mjpeg_frame(placeholder)
+            sleep(1.0)
             continue
-
-        if not can_connect_rtsp(rtsp_url):
-            frame_bytes = encode_frame(
-                build_message_frame(
-                    [
-                        'Stream offline or unreachable',
-                        'Retrying connection...',
-                    ],
-                    background_color=(35, 35, 70),
-                    text_color=(255, 220, 220),
-                )
-            )
-            yield format_mjpeg_frame(frame_bytes)
-            time.sleep(2.0)
-            continue
-
-        logger.info("Opening RTSP stream: %s", rtsp_url)
-        cap = cv2.VideoCapture(rtsp_url)
-
-        if not cap.isOpened():
-            logger.error("✗ Failed to open RTSP stream")
-            cap.release()
-            frame_bytes = encode_frame(
-                build_message_frame(
-                    [
-                        'Unable to open stream',
-                        'Check credentials and camera status.',
-                    ],
-                    background_color=(60, 0, 0),
-                    text_color=(220, 220, 255),
-                )
-            )
-            yield format_mjpeg_frame(frame_bytes)
-            time.sleep(2.0)
-            continue
-
-        logger.info("✓ RTSP stream opened successfully")
-        frame_count = 0
-
-        try:
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    logger.warning("Stream ended or failed to read frame")
-                    break
-
-                frame_count += 1
-
-                config['frame_width'] = int(frame.shape[1])
-                config['frame_height'] = int(frame.shape[0])
-
-                polygon_points: List[Tuple[int, int]] = config['polygon']  # type: ignore[assignment]
-                target_point: Tuple[int, int] = config['point']  # type: ignore[assignment]
-                max_dist = max(int(config['max_dist']), 1)
-
-                closest_val = 0
-                best_box = None
-
-                if polygon_points:
-                    poly = np.array(polygon_points, np.int32)
-
-                    results = model(frame, classes=[0], verbose=False)  # type: ignore[misc]
-                    for result in results:
-                        for box in result.boxes:
-                            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                            cx = (x1 + x2) / 2
-                            cy = (y1 + y2) / 2
-                            if cv2.pointPolygonTest(poly, (cx, cy), False) >= 0:
-                                dist = np.linalg.norm(np.array(target_point) - np.array([cx, cy]))
-                                val = max(0, 1000 * (1 - dist / max_dist))
-                                if val > closest_val:
-                                    closest_val = val
-                                    best_box = (x1, y1, x2, y2)
-
-                    poly_draw = poly.reshape((-1, 1, 2))
-                    cv2.polylines(frame, [poly_draw], True, (255, 255, 0), 2)
-
-                cv2.circle(frame, target_point, 10, (0, 255, 255), -1)
-
-                if best_box:
-                    cv2.rectangle(
-                        frame,
-                        (int(best_box[0]), int(best_box[1])),
-                        (int(best_box[2]), int(best_box[3])),
-                        (0, 255, 0),
-                        3,
-                    )
-
-                cv2.putText(
-                    frame,
-                    f"Proximity: {int(closest_val)}",
-                    (10, 35),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1.2,
-                    (0, 255, 0) if closest_val > 0 else (255, 255, 255),
-                    2,
-                )
-
-                cv2.putText(
-                    frame,
-                    f"Frame: {frame_count}",
-                    (10, frame.shape[0] - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.5,
-                    (200, 200, 200),
-                    1,
-                )
-
-                frame_bytes = encode_frame(frame)
-                yield format_mjpeg_frame(frame_bytes)
-
-        except Exception as exc:  # pragma: no cover - logging path
-            logger.error(f"Error in frame generation: {exc}")
-        finally:
-            cap.release()
-            logger.info("Stream closed after %s frames", frame_count)
-
-        time.sleep(0.5)
+        yield format_mjpeg_frame(frame_bytes)
 
 
 @app.route('/', methods=['GET'])
 def index():
     """Main page with video stream and inline configuration."""
-    return render_template('index.html', config=config, config_json=json.dumps(serialize_config()))
+    return render_template(
+        'index.html',
+        config=config,
+        config_json=json.dumps(serialize_config()),
+        datetime=datetime,
+    )
 
 
 @app.route('/video_feed')
 def video_feed():
     """Video streaming route."""
+    get_detection_worker()
     return Response(gen_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
@@ -362,12 +623,6 @@ def config_page():
     if 'rtsp_url' in payload:
         updates['rtsp_url'] = str(payload.get('rtsp_url', '')).strip()
 
-    if 'max_dist' in payload:
-        try:
-            updates['max_dist'] = max(int(payload['max_dist']), 1)
-        except (TypeError, ValueError):
-            return jsonify({'status': 'error', 'message': 'max_dist must be an integer'}), 400
-
     if 'polygon' in payload:
         try:
             updates['polygon'] = normalize_polygon(payload['polygon'])  # type: ignore[arg-type]
@@ -381,25 +636,30 @@ def config_page():
             return jsonify({'status': 'error', 'message': str(exc)}), 400
 
     try:
-        update_config(updates)
+        warnings = update_config(updates)
         save_config()
         logger.info("Configuration updated via API")
     except Exception as exc:  # pragma: no cover - logging path
         logger.error(f"Failed to save config: {exc}")
         return jsonify({'status': 'error', 'message': f'Failed to save configuration: {exc}'}), 500
 
-    return jsonify({'status': 'ok', 'config': serialize_config()})
+    response_payload = {'status': 'ok', 'config': serialize_config()}
+    if warnings:
+        response_payload['warnings'] = warnings
+    return jsonify(response_payload)
 
 
 @app.route('/health')
 def health():
     """Health check endpoint."""
+    worker = get_detection_worker()
     return jsonify(
         {
             'status': 'healthy',
             'model_loaded': model is not None,
-            'rtsp_configured': bool(config['rtsp_url']),
-            'timestamp': datetime.now().isoformat(),
+            'rtsp_configured': bool(config.get('rtsp_url')),
+            'worker_status': worker.current_status(),
+            'timestamp': datetime.utcnow().isoformat(),
         }
     )
 
@@ -407,17 +667,48 @@ def health():
 @app.route('/status')
 def status():
     """Status information endpoint."""
+    worker = get_detection_worker()
     return jsonify(
         {
             'config': serialize_config(),
             'model_loaded': model is not None,
+            'worker_status': worker.current_status(),
         }
     )
+
+
+@app.route('/metrics')
+def metrics():
+    """Return the latest proximity metrics as JSON."""
+    worker = get_detection_worker()
+    return jsonify(worker.get_metrics())
+
+
+@app.route('/events/metrics')
+def metrics_stream():
+    """Server-Sent Events endpoint for continuous metrics updates."""
+    worker = get_detection_worker()
+
+    def event_stream():
+        while True:
+            payload = worker.get_metrics()
+            yield f"data: {json.dumps(payload)}\n\n"
+            sleep(0.5)
+
+    response = Response(event_stream(), mimetype='text/event-stream')
+    response.headers['Cache-Control'] = 'no-cache'
+    return response
+
+
+# Initialize derived geometry fields on module load
+with CONFIG_LOCK:
+    _recalculate_geometry_locked()
 
 
 if __name__ == '__main__':  # pragma: no cover - application entry point
     load_config()
     load_model()
+    get_detection_worker()
     port = int(os.environ.get('PORT', 5000))
     server = WSGIServer(('0.0.0.0', port), app)
     logger.info("============================================================")

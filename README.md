@@ -1,42 +1,47 @@
 # Person Detection RTSP
 
-Real-time multi-person detection for RTSP streams using YOLO11. The application scores the closest detected person inside a defined polygon from 0 (polygon boundary) to 1000 (target point) and exposes the results through an interactive web dashboard.
+Real-time person detection for RTSP streams using YOLO11, optimized for NVIDIA GPUs with an optional TensorRT inference path. The application scores the closest detected person inside a defined polygon from 0 (polygon boundary) to 1000 (target point) and exposes the results through an interactive web dashboard.
 
 ## Features
 
-- 🚀 **YOLO11 detection pipeline** tuned for person-class inference.
-- 🛡️ **RTSP pre-flight connectivity checks** prevent UI stalls when the camera is offline and display an informative placeholder instead.
-- 🎯 **Interactive detection zone editor** directly on the main page:
-  - Toggle edit mode to draw/reshape the polygonal target zone.
-  - Right-click edges to add vertices, drag existing vertices to reposition them.
-  - Drag the target point marker to redefine the priority location.
-- 💾 **Config persistence** to `config/config.json`, editable both through the UI and a JSON API.
-- 📈 **Proximity scoring** (0–1000) reported on the live stream overlay for the person closest to your target point while inside the polygon.
+- 🚀 **YOLO11 detection pipeline** restricted to the person class with automatic TensorRT acceleration when enabled.
+- 🧮 **Geometry-aware proximity scoring** that auto-computes the distance scale from the polygon and keeps the reference point inside the zone.
+- 📈 **Live proximity card** powered by Server-Sent Events (SSE) that updates while the stream runs.
+- 🛡️ **RTSP pre-flight connectivity checks** to surface offline status without freezing the UI.
+- 🎯 **Interactive detection zone editor** directly on the main page for polygon and target point adjustments.
+- 🧵 **Multithreaded inference worker** so health and metrics endpoints remain responsive during streaming.
 
 ## Getting Started
 
 1. Clone this repository.
-2. Ensure Docker (and NVIDIA Docker if you intend to leverage GPUs) is installed on your host machine.
-3. Build and start the stack:
+2. Ensure Docker is installed on your host. Install the NVIDIA Container Toolkit if you plan to leverage GPU acceleration.
+3. Start the stack with the repository's Compose file:
    ```bash
-   docker-compose up --build
+   docker-compose up -d
    ```
 4. Browse to <http://localhost:5000> to access the dashboard.
 
-> **Tip:** The default configuration creates a simple rectangular detection zone. You can reshape it as soon as the UI loads—even if no RTSP stream is currently reachable.
+To stop the services run `docker-compose down`.
+
+## Configuration & Environment
+
+### Environment Variables
+
+| Variable     | Default | Description |
+|--------------|---------|-------------|
+| `ENABLE_TRT` | `1`     | When set to `1`, the entrypoint exports the bundled YOLO model to ONNX and TensorRT if the CUDA/TensorRT toolchain is available, then loads the engine for inference. Set to `0` to force PyTorch inference. |
+
+Configure additional runtime options through `config/config.json` or the in-app editor. The distributed `config/config.json.example` ships with a blank RTSP URL, a centered rectangular polygon, and a target point guaranteed to fall inside the zone. The application validates inputs, auto-adjusts the target point if necessary, and recalculates proximity scaling on every update.
 
 ## Using the Web UI
 
-1. **Live Feed** – The left panel renders the MJPEG stream. When the stream is offline you will see a status frame instead of a frozen UI.
-2. **Edit Mode** – Click **Enable Edit Mode** to overlay the polygon controls.
+1. **Live Feed** – The left panel renders the MJPEG stream. If the RTSP source is unreachable an offline status frame is shown.
+2. **Edit Mode** – Click **Enable Edit Mode** to overlay polygon controls.
    - Drag polygon vertices (red handles) to reshape the detection zone.
-   - Right-click along polygon edges to insert new vertices on the fly.
-   - Drag the green marker to update the target proximity point.
-   - Click **Reset Geometry** while in edit mode to start from a centered rectangle.
-3. **Configuration Form** – The right panel mirrors the current RTSP URL, max distance, polygon, and target point.
-   - Adjust the RTSP URL or maximum distance as needed.
-   - Save your changes to persist them to disk and apply immediately.
-4. **Persistence** – Settings are written to `config/config.json`. They will be reloaded automatically on the next startup.
+   - Right-click edges to add vertices or drag the green marker to reposition the target point.
+   - Click **Reset Geometry** to revert to the default rectangle.
+3. **Proximity Card** – The right panel displays the live proximity score, raw distance, last update time, and derived auto max distance.
+4. **Configuration Form** – Update the RTSP URL from the form; geometry fields update automatically from the editor. Saving persists the configuration to disk.
 
 ### API Endpoints
 
@@ -45,8 +50,20 @@ Real-time multi-person detection for RTSP streams using YOLO11. The application 
 | `/video_feed`  | GET    | MJPEG stream with bounding boxes and score. |
 | `/config`      | GET    | Returns current configuration as JSON.      |
 | `/config`      | POST   | Accepts JSON payload to update config.      |
+| `/metrics`     | GET    | Latest proximity metrics snapshot.          |
+| `/events/metrics` | GET | Server-Sent Events stream for live metrics. |
 | `/health`      | GET    | Lightweight status check (JSON).            |
 | `/status`      | GET    | Extended status snapshot (JSON).            |
+
+## GPU Acceleration & TensorRT
+
+- When `ENABLE_TRT=1` the entrypoint script:
+  1. Downloads `yolo11n.pt` if it is not present.
+  2. Exports the model to ONNX using Ultralytics.
+  3. Builds a TensorRT engine from the ONNX artifact and caches it inside the container volume.
+  4. Loads the TensorRT engine for inference at runtime, falling back to PyTorch if conversion fails.
+- TensorRT execution requires CUDA, TensorRT, and compatible NVIDIA drivers on the host. The provided Docker image (`ghcr.io/clsferguson/person-detection-rtsp:latest`) expects the NVIDIA runtime to be available.
+- Inference is locked to 5 FPS; extra frames are skipped to balance throughput and responsiveness.
 
 ## Make Targets
 
@@ -71,4 +88,7 @@ make test
 - ultralytics: <https://pypi.org/project/ultralytics/> (accessed 2025-10-11)
 - opencv-python: <https://pypi.org/project/opencv-python/> (accessed 2025-10-11)
 - flask: <https://pypi.org/project/Flask/> (accessed 2025-10-11)
+- Ultralytics TensorRT integration: <https://docs.ultralytics.com/integrations/tensorrt/> (accessed 2025-10-11)
+- Ultralytics export mode: <https://docs.ultralytics.com/modes/export/> (accessed 2025-10-11)
+- Ultralytics ONNX integration: <https://docs.ultralytics.com/integrations/onnx/> (accessed 2025-10-11)
 - Issue report: internal notes (accessed 2025-10-11)

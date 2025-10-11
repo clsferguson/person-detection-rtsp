@@ -2,6 +2,8 @@ services:
   app:
     image: ghcr.io/clsferguson/person-detection-rtsp:latest
     gpus: all
+    environment:
+      - ENABLE_TRT=1
     ports:
       - "5000:5000"
     runtime: nvidia
